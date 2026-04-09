@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Blackjack Counter & Strategy Assistant</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<!-- Card detection is powered by the backend /api/detect endpoint (Roboflow). -->
 <style>
   :root {
     --bg: #f6f7f9;
@@ -305,8 +305,9 @@
     </div>
     <div class="ocr-status" id="ocrStatus"></div>
     <p class="hint">
-      OCR attempts to detect card values from the shared screen. Accuracy varies by casino — always
-      review detected cards (shown in blue below) and remove false positives.
+      Card detection uses a Roboflow vision model via the backend. Only new cards (ones that
+      weren't visible in the last scan) are added to the count. Detected cards appear in blue
+      below — click any to remove false positives.
     </p>
   </section>
 
@@ -423,7 +424,11 @@ const state = {
   stream: null,
   autoScan: false,
   autoScanTimer: null,
-  ocrBusy: false
+  ocrBusy: false,
+  // Multiset of cards currently visible (by specific rank+suit). Used to dedupe across scans.
+  // Key = card label like "AS", value = count. A new scan only adds cards whose count
+  // increased vs the previous scan.
+  lastVisible: {}
 };
 
 /* ============================================================
@@ -466,6 +471,7 @@ function resetShoe() {
   state.runningCount = 0;
   state.cardsSeen = 0;
   state.history = [];
+  state.lastVisible = {};
   render();
 }
 
@@ -730,58 +736,92 @@ function setStatus(msg) {
   document.getElementById('ocrStatus').textContent = msg;
 }
 
-function grabFrame() {
-  if (!state.stream || !video.videoWidth) return null;
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas;
+// Roboflow playing card models return classes like "AS" (Ace of Spades), "10H", "KD", etc.
+// We normalize each prediction to: { label: "AS", rank: "A" }
+function normalizePrediction(p) {
+  if (!p || !p.class) return null;
+  const raw = String(p.class).toUpperCase().replace(/\s+/g, '');
+  // Try to find rank prefix: 10, or single char 2-9, J, Q, K, A
+  let rank = null;
+  if (raw.startsWith('10')) rank = '10';
+  else if (/^[2-9JQKA]/.test(raw)) rank = raw[0];
+  if (!rank) return null;
+  return { label: raw, rank };
 }
 
-// Parse OCR text for card values. Returns an array of normalized card strings.
-function parseCards(text) {
-  const cleaned = text.toUpperCase().replace(/[^0-9JQKA\s]/g, ' ');
-  const tokens = cleaned.split(/\s+/).filter(Boolean);
-  const cards = [];
-  for (const t of tokens) {
-    if (t === '10') cards.push('10');
-    else if (t === 'A' || t === 'J' || t === 'Q' || t === 'K') cards.push(t);
-    else if (/^[2-9]$/.test(t)) cards.push(t);
+// Convert detection list into a multiset of labels -> count
+function toMultiset(detections) {
+  const m = {};
+  for (const d of detections) m[d.label] = (m[d.label] || 0) + 1;
+  return m;
+}
+
+// Given a new multiset and the previous one, return the list of "newly appeared" labels
+// (those whose count increased). This is how we avoid double-counting the same card
+// across consecutive scans.
+function diffNewCards(current, previous) {
+  const newly = [];
+  for (const [label, count] of Object.entries(current)) {
+    const prev = previous[label] || 0;
+    const delta = count - prev;
+    for (let i = 0; i < delta; i++) newly.push(label);
   }
-  return cards;
+  return newly;
 }
 
-// Very rough dedupe signature: value + sequence index. Used to dedupe within a single
-// scan but not across scans (new scans add new cards — user must review).
+// Capture the current frame as a base64 JPEG (no data: prefix) for the Roboflow API.
+function grabFrameBase64(maxWidth = 900) {
+  if (!state.stream || !video.videoWidth) return null;
+  const scale = Math.min(1, maxWidth / video.videoWidth);
+  const w = Math.round(video.videoWidth * scale);
+  const h = Math.round(video.videoHeight * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  // JPEG with moderate quality keeps the payload small.
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+  return dataUrl.split(',')[1]; // strip "data:image/jpeg;base64,"
+}
+
 async function scanNow() {
   if (state.ocrBusy) return;
-  const canvas = grabFrame();
-  if (!canvas) { setStatus('No frame available yet.'); return; }
+  const image = grabFrameBase64();
+  if (!image) { setStatus('No frame available yet.'); return; }
   state.ocrBusy = true;
-  setStatus('Scanning frame for cards...');
+  setStatus('Detecting cards via Roboflow...');
   try {
-    const result = await Tesseract.recognize(canvas, 'eng', {
-      tessedit_char_whitelist: '0123456789JQKA'
+    const res = await fetch('/api/detect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image })
     });
-    const text = (result && result.data && result.data.text) || '';
-    const cards = parseCards(text);
-    if (cards.length === 0) {
-      setStatus('No cards detected. Try again or enter manually.');
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus('Detection error: ' + (data.error || res.status));
+      return;
+    }
+    const predictions = (data.predictions || [])
+      .map(normalizePrediction)
+      .filter(Boolean);
+
+    const current = toMultiset(predictions);
+    const newLabels = diffNewCards(current, state.lastVisible);
+    state.lastVisible = current;
+
+    if (newLabels.length === 0) {
+      setStatus('Scan complete — no new cards since last scan. (' +
+        predictions.length + ' visible)');
     } else {
-      // Prompt the user with a simple confirm listing detected cards.
-      const msg = 'OCR detected: ' + cards.join(', ') + '\n\nAdd these to the count?';
-      if (confirm(msg)) {
-        cards.forEach(c => addCard(c, 'ocr'));
-        setStatus('Added ' + cards.length + ' OCR cards. Remove any wrong ones below.');
-      } else {
-        setStatus('OCR results discarded.');
-      }
+      newLabels.forEach(label => {
+        // Extract rank only — Hi-Lo count doesn't care about suit.
+        const rank = label.startsWith('10') ? '10' : label[0];
+        addCard(rank, 'ocr');
+      });
+      setStatus('Added ' + newLabels.length + ' new card(s): ' + newLabels.join(', '));
     }
   } catch (err) {
     console.error(err);
-    setStatus('OCR error: ' + (err.message || err));
+    setStatus('Request failed: ' + (err.message || err));
   } finally {
     state.ocrBusy = false;
   }
