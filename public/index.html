@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Blackjack Counter & Strategy Assistant</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --pos: #059669;
+    --neg: #dc2626;
+    --warn: #d97706;
+    --chip: #f3f4f6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  header .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  select, button, input[type="number"] {
+    font-family: inherit;
+    font-size: 14px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.ghost { background: var(--chip); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  main {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 20px;
+    padding: 20px 24px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .panel h2 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .video-wrap {
+    position: relative;
+    background: #000;
+    border-radius: 10px;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .video-wrap video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .video-wrap .placeholder {
+    color: #9ca3af;
+    font-size: 14px;
+    text-align: center;
+    padding: 20px;
+  }
+  .video-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .ocr-status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+    min-height: 16px;
+  }
+
+  /* Count panel */
+  .count-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .count-box {
+    background: var(--chip);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .count-box .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .count-box .value {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .count-box.big { grid-column: span 2; }
+  .count-box.big .value { font-size: 44px; }
+  .value.pos { color: var(--pos); }
+  .value.neg { color: var(--neg); }
+
+  /* Strategy panel */
+  .strategy-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .strategy-inputs label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .strategy-inputs select, .strategy-inputs input {
+    width: 100%;
+  }
+  .recommendation {
+    background: var(--chip);
+    border-radius: 10px;
+    padding: 24px;
+    text-align: center;
+  }
+  .recommendation .move {
+    font-size: 48px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+    margin: 4px 0;
+  }
+  .recommendation .detail {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  /* Card buttons */
+  .card-buttons {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+  }
+  .card-buttons button {
+    padding: 12px 0;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .card-buttons button.card-lo { border-color: #a7f3d0; }
+  .card-buttons button.card-lo:hover { background: #ecfdf5; }
+  .card-buttons button.card-mid { border-color: #e5e7eb; }
+  .card-buttons button.card-hi { border-color: #fecaca; }
+  .card-buttons button.card-hi:hover { background: #fef2f2; }
+
+  /* Recent cards */
+  .recent-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 40px;
+    padding: 10px;
+    background: var(--chip);
+    border-radius: 8px;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+  .recent-card {
+    padding: 6px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .recent-card:hover {
+    background: #fef2f2;
+    border-color: var(--neg);
+    color: var(--neg);
+  }
+  .recent-card.ocr {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+  }
+  .recent-cards .empty {
+    color: var(--muted);
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+  .notice {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    font-size: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>♠️ Blackjack Counter &amp; Strategy Assistant</h1>
+  <div class="controls">
+    <label style="font-size:12px;color:var(--muted)">Decks</label>
+    <select id="deckCount">
+      <option value="2">2 decks</option>
+      <option value="6" selected>6 decks</option>
+      <option value="8">8 decks</option>
+    </select>
+    <button id="resetBtn" class="ghost">Reset Shoe</button>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT: Screen share + OCR -->
+  <section class="panel">
+    <h2>Screen Share</h2>
+    <div class="video-wrap" id="videoWrap">
+      <div class="placeholder" id="videoPlaceholder">
+        Click "Start Screen Share" and pick the tab or window showing your blackjack game.
+      </div>
+      <video id="video" autoplay muted playsinline style="display:none;"></video>
+    </div>
+    <div class="video-actions">
+      <button id="startShareBtn" class="primary">Start Screen Share</button>
+      <button id="stopShareBtn" disabled>Stop</button>
+      <button id="scanBtn" disabled>Scan Frame for Cards</button>
+      <div class="spacer"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);">
+        <input type="checkbox" id="autoScan" /> Auto-scan every 4s
+      </label>
+    </div>
+    <div class="ocr-status" id="ocrStatus"></div>
+    <p class="hint">
+      OCR attempts to detect card values from the shared screen. Accuracy varies by casino — always
+      review detected cards (shown in blue below) and remove false positives.
+    </p>
+  </section>
+
+  <!-- RIGHT: Count + Strategy + Cards -->
+  <section style="display:flex;flex-direction:column;gap:20px;">
+
+    <div class="panel">
+      <h2>Count</h2>
+      <div class="count-grid">
+        <div class="count-box big">
+          <div class="label">Running Count</div>
+          <div class="value" id="runningCount">0</div>
+        </div>
+        <div class="count-box">
+          <div class="label">True Count</div>
+          <div class="value" id="trueCount">0</div>
+        </div>
+        <div class="count-box">
+          <div class="label">Decks Left</div>
+          <div class="value" id="decksLeft">6.0</div>
+        </div>
+        <div class="count-box">
+          <div class="label">Cards Seen</div>
+          <div class="value" id="cardsSeen">0</div>
+        </div>
+        <div class="count-box">
+          <div class="label">Cards Remaining</div>
+          <div class="value" id="cardsRemaining">312</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Strategy Advisor</h2>
+      <div class="strategy-inputs">
+        <label>Hand Type
+          <select id="handType">
+            <option value="hard">Hard Total</option>
+            <option value="soft">Soft (has Ace)</option>
+            <option value="pair">Pair</option>
+          </select>
+        </label>
+        <label>Your Hand
+          <select id="handValue"></select>
+        </label>
+        <label>Dealer Up
+          <select id="dealerUp">
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10 / J / Q / K</option>
+            <option value="11">A</option>
+          </select>
+        </label>
+      </div>
+      <div class="recommendation">
+        <div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;">Recommended</div>
+        <div class="move" id="moveText">—</div>
+        <div class="detail" id="moveDetail">Select your hand and the dealer's upcard.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Log a Card</h2>
+      <div class="card-buttons" id="cardButtons">
+        <button data-card="2" class="card-lo">2</button>
+        <button data-card="3" class="card-lo">3</button>
+        <button data-card="4" class="card-lo">4</button>
+        <button data-card="5" class="card-lo">5</button>
+        <button data-card="6" class="card-lo">6</button>
+        <button data-card="7" class="card-mid">7</button>
+        <button data-card="8" class="card-mid">8</button>
+        <button data-card="9" class="card-mid">9</button>
+        <button data-card="10" class="card-hi">10</button>
+        <button data-card="J" class="card-hi">J</button>
+        <button data-card="Q" class="card-hi">Q</button>
+        <button data-card="K" class="card-hi">K</button>
+        <button data-card="A" class="card-hi">A</button>
+        <button data-card="undo" class="ghost">Undo</button>
+      </div>
+      <p class="hint">Low cards (2–6) = +1 · Middle (7–9) = 0 · High (10–A) = −1</p>
+
+      <h2 style="margin-top:14px;">Recent Cards (click to remove)</h2>
+      <div class="recent-cards" id="recentCards">
+        <span class="empty">No cards logged yet.</span>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<div style="max-width:1400px;margin:0 auto;padding:0 24px 24px;">
+  <div class="notice">
+    <strong>Note:</strong> Most online blackjack uses continuous shuffling, which makes card
+    counting ineffective against the house. This tool is for practice and learning basic
+    strategy + Hi-Lo counting.
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   State
+   ============================================================ */
+const state = {
+  decks: 6,
+  runningCount: 0,
+  cardsSeen: 0,
+  history: [],    // [{card: '10', delta: -1, source: 'manual'|'ocr'}]
+  stream: null,
+  autoScan: false,
+  autoScanTimer: null,
+  ocrBusy: false
+};
+
+/* ============================================================
+   Hi-Lo values
+   ============================================================ */
+function cardDelta(card) {
+  const c = String(card).toUpperCase();
+  if (['2','3','4','5','6'].includes(c)) return +1;
+  if (['7','8','9'].includes(c)) return 0;
+  if (['10','J','Q','K','A'].includes(c)) return -1;
+  return 0;
+}
+
+/* ============================================================
+   Count logic
+   ============================================================ */
+function addCard(card, source = 'manual') {
+  const delta = cardDelta(card);
+  state.runningCount += delta;
+  state.cardsSeen += 1;
+  state.history.push({ card, delta, source });
+  render();
+}
+
+function removeCardAtIndex(i) {
+  const entry = state.history[i];
+  if (!entry) return;
+  state.runningCount -= entry.delta;
+  state.cardsSeen -= 1;
+  state.history.splice(i, 1);
+  render();
+}
+
+function undoLast() {
+  if (state.history.length === 0) return;
+  removeCardAtIndex(state.history.length - 1);
+}
+
+function resetShoe() {
+  state.runningCount = 0;
+  state.cardsSeen = 0;
+  state.history = [];
+  render();
+}
+
+/* ============================================================
+   Basic Strategy Tables (Blackjack Apprenticeship style)
+   H=Hit, S=Stand, D=Double (else hit), Ds=Double (else stand),
+   P=Split
+   Dealer upcard index: 2..10, A (0..9)
+   ============================================================ */
+const DEALER_COLS = ['2','3','4','5','6','7','8','9','10','A'];
+function dIdx(up) { return DEALER_COLS.indexOf(String(up)); }
+
+const HARD = {
+  5:  ['H','H','H','H','H','H','H','H','H','H'],
+  6:  ['H','H','H','H','H','H','H','H','H','H'],
+  7:  ['H','H','H','H','H','H','H','H','H','H'],
+  8:  ['H','H','H','H','H','H','H','H','H','H'],
+  9:  ['H','D','D','D','D','H','H','H','H','H'],
+  10: ['D','D','D','D','D','D','D','D','H','H'],
+  11: ['D','D','D','D','D','D','D','D','D','H'],
+  12: ['H','H','S','S','S','H','H','H','H','H'],
+  13: ['S','S','S','S','S','H','H','H','H','H'],
+  14: ['S','S','S','S','S','H','H','H','H','H'],
+  15: ['S','S','S','S','S','H','H','H','H','H'],
+  16: ['S','S','S','S','S','H','H','H','H','H'],
+  17: ['S','S','S','S','S','S','S','S','S','S'],
+  18: ['S','S','S','S','S','S','S','S','S','S'],
+  19: ['S','S','S','S','S','S','S','S','S','S'],
+  20: ['S','S','S','S','S','S','S','S','S','S'],
+  21: ['S','S','S','S','S','S','S','S','S','S'],
+};
+
+// Soft totals (A counted as 11). Key = total.
+const SOFT = {
+  13: ['H','H','H','D','D','H','H','H','H','H'], // A,2
+  14: ['H','H','H','D','D','H','H','H','H','H'], // A,3
+  15: ['H','H','D','D','D','H','H','H','H','H'], // A,4
+  16: ['H','H','D','D','D','H','H','H','H','H'], // A,5
+  17: ['H','D','D','D','D','H','H','H','H','H'], // A,6
+  18: ['Ds','Ds','Ds','Ds','Ds','S','S','H','H','H'], // A,7
+  19: ['S','S','S','S','S','S','S','S','S','S'], // A,8
+  20: ['S','S','S','S','S','S','S','S','S','S'], // A,9
+};
+
+// Pairs. Key = single-card value (string). '10' covers 10/J/Q/K pairs.
+const PAIRS = {
+  '2':  ['P','P','P','P','P','P','H','H','H','H'],
+  '3':  ['P','P','P','P','P','P','H','H','H','H'],
+  '4':  ['H','H','H','P','P','H','H','H','H','H'],
+  '5':  ['D','D','D','D','D','D','D','D','H','H'], // never split, play as 10
+  '6':  ['P','P','P','P','P','H','H','H','H','H'],
+  '7':  ['P','P','P','P','P','P','H','H','H','H'],
+  '8':  ['P','P','P','P','P','P','P','P','P','P'],
+  '9':  ['P','P','P','P','P','S','P','P','S','S'],
+  '10': ['S','S','S','S','S','S','S','S','S','S'],
+  'A':  ['P','P','P','P','P','P','P','P','P','P'],
+};
+
+function moveLabel(code) {
+  switch (code) {
+    case 'H': return { text: 'HIT', detail: 'Take another card.' };
+    case 'S': return { text: 'STAND', detail: 'Keep your total.' };
+    case 'D': return { text: 'DOUBLE', detail: 'Double down if allowed; otherwise HIT.' };
+    case 'Ds': return { text: 'DOUBLE', detail: 'Double down if allowed; otherwise STAND.' };
+    case 'P': return { text: 'SPLIT', detail: 'Split the pair.' };
+    default:  return { text: '—', detail: '' };
+  }
+}
+
+function getStrategy(type, value, dealerUp, trueCount) {
+  const col = dIdx(dealerUp);
+  if (col < 0) return { text: '—', detail: 'Select dealer upcard.' };
+  let code = null;
+  if (type === 'hard') code = (HARD[value] || [])[col];
+  else if (type === 'soft') code = (SOFT[value] || [])[col];
+  else if (type === 'pair') code = (PAIRS[String(value)] || [])[col];
+
+  // Common Illustrious 18 deviations (basic set)
+  const up = String(dealerUp);
+  if (type === 'hard') {
+    if (value === 16 && up === '10' && trueCount >= 0) code = 'S';
+    if (value === 15 && up === '10' && trueCount >= 4) code = 'S';
+    if (value === 12 && up === '3' && trueCount >= 2) code = 'S';
+    if (value === 12 && up === '2' && trueCount >= 3) code = 'S';
+    if (value === 13 && up === '2' && trueCount >= -1) code = 'S';
+    if (value === 10 && (up === '10' || up === 'A') && trueCount >= 4) code = 'D';
+  }
+
+  if (!code) return { text: '—', detail: 'No strategy defined for this hand.' };
+  return moveLabel(code);
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+function render() {
+  const totalCards = state.decks * 52;
+  const remaining = totalCards - state.cardsSeen;
+  const decksLeft = Math.max(remaining / 52, 0.5);
+  const tc = state.runningCount / decksLeft;
+
+  const rcEl = document.getElementById('runningCount');
+  rcEl.textContent = state.runningCount > 0 ? '+' + state.runningCount : state.runningCount;
+  rcEl.className = 'value ' + (state.runningCount > 0 ? 'pos' : state.runningCount < 0 ? 'neg' : '');
+
+  const tcEl = document.getElementById('trueCount');
+  const tcRounded = Math.round(tc * 10) / 10;
+  tcEl.textContent = tcRounded > 0 ? '+' + tcRounded.toFixed(1) : tcRounded.toFixed(1);
+  tcEl.className = 'value ' + (tc > 0 ? 'pos' : tc < 0 ? 'neg' : '');
+
+  document.getElementById('decksLeft').textContent = (remaining / 52).toFixed(1);
+  document.getElementById('cardsSeen').textContent = state.cardsSeen;
+  document.getElementById('cardsRemaining').textContent = remaining;
+
+  // Recent cards
+  const rc = document.getElementById('recentCards');
+  if (state.history.length === 0) {
+    rc.innerHTML = '<span class="empty">No cards logged yet.</span>';
+  } else {
+    rc.innerHTML = '';
+    state.history.slice(-60).forEach((entry) => {
+      const realIdx = state.history.indexOf(entry);
+      const el = document.createElement('span');
+      el.className = 'recent-card' + (entry.source === 'ocr' ? ' ocr' : '');
+      el.title = 'Click to remove (' + entry.source + ')';
+      el.textContent = entry.card;
+      el.addEventListener('click', () => removeCardAtIndex(realIdx));
+      rc.appendChild(el);
+    });
+  }
+
+  // Strategy recommendation
+  updateStrategy(tc);
+}
+
+function updateStrategy(trueCount) {
+  const type = document.getElementById('handType').value;
+  const val = document.getElementById('handValue').value;
+  const up  = document.getElementById('dealerUp').value;
+  let numericVal = type === 'pair' ? val : parseInt(val, 10);
+  const { text, detail } = getStrategy(type, numericVal, up, trueCount);
+  document.getElementById('moveText').textContent = text;
+  document.getElementById('moveDetail').textContent = detail;
+}
+
+/* ============================================================
+   Strategy input population
+   ============================================================ */
+function populateHandValue() {
+  const type = document.getElementById('handType').value;
+  const sel = document.getElementById('handValue');
+  sel.innerHTML = '';
+  const add = (v, label) => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = label;
+    sel.appendChild(o);
+  };
+  if (type === 'hard') {
+    for (let i = 5; i <= 21; i++) add(i, String(i));
+  } else if (type === 'soft') {
+    [13,14,15,16,17,18,19,20].forEach(v => {
+      add(v, 'A,' + (v - 11) + ' (' + v + ')');
+    });
+  } else if (type === 'pair') {
+    ['2','3','4','5','6','7','8','9','10','A'].forEach(v => {
+      add(v, v + ',' + v);
+    });
+  }
+}
+
+/* ============================================================
+   Card buttons
+   ============================================================ */
+document.getElementById('cardButtons').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const c = btn.dataset.card;
+  if (c === 'undo') { undoLast(); return; }
+  if (c) addCard(c, 'manual');
+});
+
+// Keyboard shortcuts (bonus)
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const k = e.key.toUpperCase();
+  if ('23456789'.includes(k)) addCard(k, 'manual');
+  else if (k === 'T' || k === '0') addCard('10', 'manual');
+  else if (k === 'J') addCard('J', 'manual');
+  else if (k === 'Q') addCard('Q', 'manual');
+  else if (k === 'K') addCard('K', 'manual');
+  else if (k === 'A') addCard('A', 'manual');
+  else if (k === 'BACKSPACE' || k === 'U') undoLast();
+});
+
+/* ============================================================
+   Deck selector & reset
+   ============================================================ */
+document.getElementById('deckCount').addEventListener('change', (e) => {
+  state.decks = parseInt(e.target.value, 10);
+  render();
+});
+document.getElementById('resetBtn').addEventListener('click', () => {
+  if (state.history.length === 0 || confirm('Reset the shoe? This clears the count.')) {
+    resetShoe();
+  }
+});
+
+/* ============================================================
+   Strategy input listeners
+   ============================================================ */
+['handType','handValue','dealerUp'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if (id === 'handType') populateHandValue();
+    render();
+  });
+});
+
+/* ============================================================
+   Screen share
+   ============================================================ */
+const video = document.getElementById('video');
+const placeholder = document.getElementById('videoPlaceholder');
+
+document.getElementById('startShareBtn').addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 10 },
+      audio: false
+    });
+    state.stream = stream;
+    video.srcObject = stream;
+    video.style.display = 'block';
+    placeholder.style.display = 'none';
+    document.getElementById('startShareBtn').disabled = true;
+    document.getElementById('stopShareBtn').disabled = false;
+    document.getElementById('scanBtn').disabled = false;
+    stream.getVideoTracks()[0].onended = stopShare;
+  } catch (err) {
+    setStatus('Screen share cancelled or blocked.');
+  }
+});
+
+function stopShare() {
+  if (state.stream) state.stream.getTracks().forEach(t => t.stop());
+  state.stream = null;
+  video.srcObject = null;
+  video.style.display = 'none';
+  placeholder.style.display = 'block';
+  document.getElementById('startShareBtn').disabled = false;
+  document.getElementById('stopShareBtn').disabled = true;
+  document.getElementById('scanBtn').disabled = true;
+  document.getElementById('autoScan').checked = false;
+  state.autoScan = false;
+  if (state.autoScanTimer) { clearInterval(state.autoScanTimer); state.autoScanTimer = null; }
+}
+document.getElementById('stopShareBtn').addEventListener('click', stopShare);
+
+/* ============================================================
+   OCR via Tesseract.js
+   ============================================================ */
+function setStatus(msg) {
+  document.getElementById('ocrStatus').textContent = msg;
+}
+
+function grabFrame() {
+  if (!state.stream || !video.videoWidth) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+// Parse OCR text for card values. Returns an array of normalized card strings.
+function parseCards(text) {
+  const cleaned = text.toUpperCase().replace(/[^0-9JQKA\s]/g, ' ');
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  const cards = [];
+  for (const t of tokens) {
+    if (t === '10') cards.push('10');
+    else if (t === 'A' || t === 'J' || t === 'Q' || t === 'K') cards.push(t);
+    else if (/^[2-9]$/.test(t)) cards.push(t);
+  }
+  return cards;
+}
+
+// Very rough dedupe signature: value + sequence index. Used to dedupe within a single
+// scan but not across scans (new scans add new cards — user must review).
+async function scanNow() {
+  if (state.ocrBusy) return;
+  const canvas = grabFrame();
+  if (!canvas) { setStatus('No frame available yet.'); return; }
+  state.ocrBusy = true;
+  setStatus('Scanning frame for cards...');
+  try {
+    const result = await Tesseract.recognize(canvas, 'eng', {
+      tessedit_char_whitelist: '0123456789JQKA'
+    });
+    const text = (result && result.data && result.data.text) || '';
+    const cards = parseCards(text);
+    if (cards.length === 0) {
+      setStatus('No cards detected. Try again or enter manually.');
+    } else {
+      // Prompt the user with a simple confirm listing detected cards.
+      const msg = 'OCR detected: ' + cards.join(', ') + '\n\nAdd these to the count?';
+      if (confirm(msg)) {
+        cards.forEach(c => addCard(c, 'ocr'));
+        setStatus('Added ' + cards.length + ' OCR cards. Remove any wrong ones below.');
+      } else {
+        setStatus('OCR results discarded.');
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus('OCR error: ' + (err.message || err));
+  } finally {
+    state.ocrBusy = false;
+  }
+}
+document.getElementById('scanBtn').addEventListener('click', scanNow);
+
+document.getElementById('autoScan').addEventListener('change', (e) => {
+  state.autoScan = e.target.checked;
+  if (state.autoScan) {
+    state.autoScanTimer = setInterval(() => { if (!state.ocrBusy) scanNow(); }, 4000);
+  } else if (state.autoScanTimer) {
+    clearInterval(state.autoScanTimer);
+    state.autoScanTimer = null;
+  }
+});
+
+/* ============================================================
+   Init
+   ============================================================ */
+populateHandValue();
+render();
+</script>
+
+</body>
+</html>
