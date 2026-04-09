@@ -797,7 +797,11 @@ async function scanNow() {
     });
     const data = await res.json();
     if (!res.ok) {
-      setStatus('Detection error: ' + (data.error || res.status));
+      const detailStr = data.detail
+        ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+        : '';
+      console.error('Detection error:', data);
+      setStatus('Detection error: ' + (data.error || res.status) + (detailStr ? ' — ' + detailStr.slice(0, 200) : ''));
       return;
     }
     const predictions = (data.predictions || [])
