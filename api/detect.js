@@ -25,7 +25,13 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Missing "image" (base64 string) in request body.' });
     }
 
-    const url = `https://serverless.roboflow.com/${model}?api_key=${encodeURIComponent(apiKey)}`;
+    // Lower confidence/overlap thresholds to give stylized/illustrated cards a chance to match.
+    const params = new URLSearchParams({
+      api_key: apiKey,
+      confidence: '15',
+      overlap: '30'
+    });
+    const url = `https://serverless.roboflow.com/${model}?${params.toString()}`;
     const rfRes = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
