@@ -797,39 +797,38 @@ function setStatus(msg) {
   document.getElementById('ocrStatus').textContent = msg;
 }
 
-// Claude Vision returns card strings like "AS", "10H", "KD", etc.
-// Normalize to { label: "AS", rank: "A" }
-function normalizeCard(cardStr) {
+// Extract rank from a card string like "AS", "10H", "KD".
+function cardRank(cardStr) {
   if (!cardStr || typeof cardStr !== 'string') return null;
   const raw = cardStr.toUpperCase().replace(/\s+/g, '');
-  let rank = null;
-  if (raw.startsWith('10')) rank = '10';
-  else if (/^[2-9JQKA]/.test(raw)) rank = raw[0];
-  if (!rank) return null;
-  return { label: raw, rank };
+  if (raw.startsWith('10')) return '10';
+  if (/^[2-9JQKA]/.test(raw)) return raw[0];
+  return null;
 }
 
-// Convert detection list into a multiset of labels -> count
-function toMultiset(detections) {
+// Build a rank-only multiset { "K": 2, "5": 1 } from an array of card strings.
+// Using rank-only (no suit) prevents dedupe drift when Claude labels the same
+// card with different suits across scans.
+function rankMultiset(cardStrs) {
   const m = {};
-  for (const d of detections) m[d.label] = (m[d.label] || 0) + 1;
+  for (const s of cardStrs) {
+    const r = cardRank(s);
+    if (r) m[r] = (m[r] || 0) + 1;
+  }
   return m;
 }
 
-// Given a new multiset and the previous one, return the list of "newly appeared" labels
-// (those whose count increased). This is how we avoid double-counting the same card
-// across consecutive scans.
-function diffNewCards(current, previous) {
+// Return ranks that are new (count increased) compared to previous multiset.
+function diffNewRanks(current, previous) {
   const newly = [];
-  for (const [label, count] of Object.entries(current)) {
-    const prev = previous[label] || 0;
-    const delta = count - prev;
-    for (let i = 0; i < delta; i++) newly.push(label);
+  for (const [rank, count] of Object.entries(current)) {
+    const prev = previous[rank] || 0;
+    for (let i = 0; i < count - prev; i++) newly.push(rank);
   }
   return newly;
 }
 
-// Capture the current frame as a base64 JPEG (no data: prefix) for the Roboflow API.
+// Capture the current frame as a base64 JPEG for the Claude Vision API.
 function grabFrameBase64(maxWidth = 900) {
   if (!state.stream || !video.videoWidth) return null;
   const scale = Math.min(1, maxWidth / video.videoWidth);
@@ -838,9 +837,57 @@ function grabFrameBase64(maxWidth = 900) {
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-  // JPEG with moderate quality keeps the payload small.
   const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-  return dataUrl.split(',')[1]; // strip "data:image/jpeg;base64,"
+  return dataUrl.split(',')[1];
+}
+
+// Auto-set the strategy advisor from detected player cards + dealer upcard.
+function autoSetStrategy(playerCards, dealerUpcard) {
+  if (!playerCards || playerCards.length < 2 || !dealerUpcard) return;
+
+  const ranks = playerCards.map(cardRank).filter(Boolean);
+  const dealerRank = cardRank(dealerUpcard);
+  if (ranks.length < 2 || !dealerRank) return;
+
+  // Set dealer upcard dropdown.
+  const dealerVal = dealerRank === 'A' ? '11' : (['J','Q','K'].includes(dealerRank) ? '10' : dealerRank);
+  document.getElementById('dealerUp').value = dealerVal;
+
+  // Determine hand type.
+  const isPair = ranks.length === 2 && ranks[0] === ranks[1];
+  // Also treat J,J or Q,Q or K,K as 10,10 pair
+  const normRanks = ranks.map(r => ['J','Q','K'].includes(r) ? '10' : r);
+  const isPairNorm = ranks.length === 2 && normRanks[0] === normRanks[1];
+
+  const hasAce = ranks.includes('A');
+  const numericValues = ranks.map(r => {
+    if (r === 'A') return 11;
+    if (['J','Q','K'].includes(r)) return 10;
+    return parseInt(r, 10);
+  });
+  let total = numericValues.reduce((a, b) => a + b, 0);
+  // Adjust aces down from 11 to 1 if busting
+  let aces = numericValues.filter(v => v === 11).length;
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+
+  const isSoft = aces > 0 && total <= 21;
+
+  if (isPairNorm && ranks.length === 2) {
+    document.getElementById('handType').value = 'pair';
+    populateHandValue();
+    const pairVal = normRanks[0] === '10' ? '10' : (ranks[0] === 'A' ? 'A' : ranks[0]);
+    document.getElementById('handValue').value = pairVal;
+  } else if (isSoft) {
+    document.getElementById('handType').value = 'soft';
+    populateHandValue();
+    document.getElementById('handValue').value = String(total);
+  } else {
+    document.getElementById('handType').value = 'hard';
+    populateHandValue();
+    document.getElementById('handValue').value = String(Math.min(total, 21));
+  }
+
+  render();
 }
 
 async function scanNow() {
@@ -864,25 +911,22 @@ async function scanNow() {
       setStatus('Detection error: ' + (data.error || res.status) + (detailStr ? ' — ' + detailStr.slice(0, 200) : ''));
       return;
     }
-    const predictions = (data.cards || [])
-      .map(normalizeCard)
-      .filter(Boolean);
 
-    const current = toMultiset(predictions);
-    const newLabels = diffNewCards(current, state.lastVisible);
-    state.lastVisible = current;
+    const allCards = data.allCards || [];
+    const currentRanks = rankMultiset(allCards);
+    const newRanks = diffNewRanks(currentRanks, state.lastVisible);
+    state.lastVisible = currentRanks;
 
-    if (newLabels.length === 0) {
-      setStatus('Scan complete — no new cards since last scan. (' +
-        predictions.length + ' visible)');
+    if (newRanks.length > 0) {
+      newRanks.forEach(rank => addCard(rank, 'ocr'));
+      setStatus('Added ' + newRanks.length + ' new card(s): ' + newRanks.join(', '));
     } else {
-      newLabels.forEach(label => {
-        // Extract rank only — Hi-Lo count doesn't care about suit.
-        const rank = label.startsWith('10') ? '10' : label[0];
-        addCard(rank, 'ocr');
-      });
-      setStatus('Added ' + newLabels.length + ' new card(s): ' + newLabels.join(', '));
+      setStatus('Scan complete — no new cards. (' + allCards.length + ' visible)');
     }
+
+    // Auto-set strategy advisor from player hand + dealer upcard.
+    autoSetStrategy(data.playerCards, data.dealerUpcard);
+
   } catch (err) {
     console.error(err);
     setStatus('Request failed: ' + (err.message || err));

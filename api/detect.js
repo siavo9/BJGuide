@@ -1,6 +1,6 @@
 // Vercel serverless function: POST /api/detect
 // Body: { image: "<base64 jpeg>" }
-// Sends the image to Claude Haiku vision to identify playing cards.
+// Sends the image to Claude Haiku vision to identify playing cards, player hand, and dealer upcard.
 // Requires ANTHROPIC_API_KEY env var on Vercel.
 
 module.exports = async function handler(req, res) {
@@ -23,7 +23,6 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Missing "image" (base64 string) in request body.' });
     }
 
-    // Call Claude Haiku (cheapest vision model) to identify cards.
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -33,7 +32,7 @@ module.exports = async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
+        max_tokens: 400,
         messages: [{
           role: 'user',
           content: [
@@ -47,20 +46,25 @@ module.exports = async function handler(req, res) {
             },
             {
               type: 'text',
-              text: `You are analyzing a screenshot of an online blackjack game. List every playing card that is clearly visible and face-up on the table. Ignore face-down cards, chips, buttons, and UI text.
+              text: `You are analyzing a screenshot of an online blackjack game. Identify ALL face-up playing cards visible on the table. Ignore face-down cards (shown as a solid color or pattern with no rank/suit visible), chips, buttons, and UI elements.
 
-Return ONLY a JSON array of card strings using this exact format:
-- Number cards: "2","3","4","5","6","7","8","9","10"
-- Face cards: "J","Q","K"
-- Ace: "A"
+Return a JSON object with exactly these fields:
 
-Include suit as a single letter suffix: S=spades, H=hearts, D=diamonds, C=clubs.
+{
+  "allCards": ["6C","5S","9H"],
+  "playerCards": ["6C","5S"],
+  "dealerUpcard": "9H"
+}
 
-Examples: ["AS","10H","KD","5C","7S"]
+Rules:
+- "allCards": every face-up card on the table (player + dealer combined). Use rank + suit: 2-10, J, Q, K, A followed by S/H/D/C.
+- "playerCards": only the cards in the player's hand (usually the left or bottom hand).
+- "dealerUpcard": the single face-up dealer card (usually the right or top hand). If the dealer has multiple face-up cards, list only the original upcard if identifiable, otherwise the first one.
+- If a card's suit is unclear, make your best guess — the suit does not affect gameplay.
+- Do NOT include face-down cards, card backs, or cards you cannot clearly read.
+- If no cards are visible, return {"allCards":[],"playerCards":[],"dealerUpcard":null}
 
-If no face-up cards are visible, return an empty array: []
-
-Return ONLY the JSON array, nothing else.`
+Return ONLY the JSON object, nothing else.`
             }
           ]
         }]
@@ -77,23 +81,23 @@ Return ONLY the JSON array, nothing else.`
       });
     }
 
-    // Extract the text content from Claude's response.
     const textBlock = (claudeData.content || []).find(b => b.type === 'text');
-    const rawText = textBlock ? textBlock.text.trim() : '[]';
+    const rawText = textBlock ? textBlock.text.trim() : '{}';
 
-    // Parse the JSON array from Claude's response. Be lenient about markdown wrapping.
-    let cards = [];
+    let parsed = {};
     try {
       const jsonStr = rawText.replace(/```json\s*/g, '').replace(/```/g, '').trim();
-      cards = JSON.parse(jsonStr);
-      if (!Array.isArray(cards)) cards = [];
+      parsed = JSON.parse(jsonStr);
     } catch {
       console.error('Failed to parse Claude response as JSON:', rawText);
-      cards = [];
+      parsed = { allCards: [], playerCards: [], dealerUpcard: null };
     }
 
-    // Return in a format compatible with the front-end: { cards: ["AS","10H",...] }
-    return res.status(200).json({ cards });
+    return res.status(200).json({
+      allCards: Array.isArray(parsed.allCards) ? parsed.allCards : [],
+      playerCards: Array.isArray(parsed.playerCards) ? parsed.playerCards : [],
+      dealerUpcard: parsed.dealerUpcard || null
+    });
   } catch (err) {
     console.error('Detect error:', err);
     return res.status(500).json({
