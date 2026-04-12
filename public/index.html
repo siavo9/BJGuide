@@ -4,7 +4,55 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Blackjack Counter & Strategy Assistant</title>
-<!-- Card detection is powered by the backend /api/detect endpoint (Roboflow). -->
+<!-- Card detection is powered by the backend /api/detect endpoint (Claude Vision). -->
+<style>
+  /* Password overlay */
+  #authOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #f6f7f9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #authOverlay.hidden { display: none; }
+  .auth-box {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 40px;
+    max-width: 360px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+  }
+  .auth-box h1 { font-size: 20px; margin: 0 0 6px; }
+  .auth-box p { font-size: 14px; color: #6b7280; margin: 0 0 20px; }
+  .auth-box input {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 15px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-family: inherit;
+  }
+  .auth-box input:focus { outline: none; border-color: #2563eb; }
+  .auth-box button {
+    width: 100%;
+    padding: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .auth-box button:hover { background: #1d4ed8; }
+  .auth-error { color: #dc2626; font-size: 13px; margin-top: 8px; display: none; }
+</style>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -271,6 +319,19 @@
 </head>
 <body>
 
+<!-- Password gate -->
+<div id="authOverlay">
+  <div class="auth-box">
+    <h1>Blackjack Counter</h1>
+    <p>Enter the password to continue.</p>
+    <form id="authForm">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="off" autofocus />
+      <button type="submit">Enter</button>
+      <div class="auth-error" id="authError">Incorrect password. Try again.</div>
+    </form>
+  </div>
+</div>
+
 <header>
   <h1>♠️ Blackjack Counter &amp; Strategy Assistant</h1>
   <div class="controls">
@@ -305,7 +366,7 @@
     </div>
     <div class="ocr-status" id="ocrStatus"></div>
     <p class="hint">
-      Card detection uses a Roboflow vision model via the backend. Only new cards (ones that
+      Card detection uses Claude AI vision via the backend. Only new cards (ones that
       weren't visible in the last scan) are added to the count. Detected cards appear in blue
       below — click any to remove false positives.
     </p>
@@ -736,12 +797,11 @@ function setStatus(msg) {
   document.getElementById('ocrStatus').textContent = msg;
 }
 
-// Roboflow playing card models return classes like "AS" (Ace of Spades), "10H", "KD", etc.
-// We normalize each prediction to: { label: "AS", rank: "A" }
-function normalizePrediction(p) {
-  if (!p || !p.class) return null;
-  const raw = String(p.class).toUpperCase().replace(/\s+/g, '');
-  // Try to find rank prefix: 10, or single char 2-9, J, Q, K, A
+// Claude Vision returns card strings like "AS", "10H", "KD", etc.
+// Normalize to { label: "AS", rank: "A" }
+function normalizeCard(cardStr) {
+  if (!cardStr || typeof cardStr !== 'string') return null;
+  const raw = cardStr.toUpperCase().replace(/\s+/g, '');
   let rank = null;
   if (raw.startsWith('10')) rank = '10';
   else if (/^[2-9JQKA]/.test(raw)) rank = raw[0];
@@ -788,7 +848,7 @@ async function scanNow() {
   const image = grabFrameBase64();
   if (!image) { setStatus('No frame available yet.'); return; }
   state.ocrBusy = true;
-  setStatus('Detecting cards via Roboflow...');
+  setStatus('Detecting cards via Claude Vision...');
   try {
     const res = await fetch('/api/detect', {
       method: 'POST',
@@ -804,8 +864,8 @@ async function scanNow() {
       setStatus('Detection error: ' + (data.error || res.status) + (detailStr ? ' — ' + detailStr.slice(0, 200) : ''));
       return;
     }
-    const predictions = (data.predictions || [])
-      .map(normalizePrediction)
+    const predictions = (data.cards || [])
+      .map(normalizeCard)
       .filter(Boolean);
 
     const current = toMultiset(predictions);
@@ -841,6 +901,26 @@ document.getElementById('autoScan').addEventListener('change', (e) => {
     state.autoScanTimer = null;
   }
 });
+
+/* ============================================================
+   Password gate
+   ============================================================ */
+document.getElementById('authForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const pw = document.getElementById('authPassword').value;
+  if (pw === 'ovaisinamullah') {
+    document.getElementById('authOverlay').classList.add('hidden');
+    sessionStorage.setItem('bjauth', '1');
+  } else {
+    document.getElementById('authError').style.display = 'block';
+    document.getElementById('authPassword').value = '';
+    document.getElementById('authPassword').focus();
+  }
+});
+// Auto-unlock if already authenticated this session.
+if (sessionStorage.getItem('bjauth') === '1') {
+  document.getElementById('authOverlay').classList.add('hidden');
+}
 
 /* ============================================================
    Init
